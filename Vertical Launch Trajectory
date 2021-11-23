@@ -1,0 +1,381 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+from scipy.integrate import odeint
+from mpl_toolkits import mplot3d
+
+"""Introduce our constants"""
+T1 = 1650245.73705
+T2 = 1650245.73705
+T3 = 813932.545
+mc_1 = 2600
+mc_2 = 1070
+mc_3 = 220
+mf_1 = 48596.526
+mf_2 = 48596.526
+mf_3 = 25177.853
+mp = 465
+m_0_first_stage = 136077.711  # 27.298096e3  # mc_1 + mc_2 + mc_3 + mf_1 + mf_2 + mf_3 + mp
+m_0_second_stage = 83388.874893  # mc_2 + mc_3 + mf_2 + mf_3 + mp
+m_0_third_stage = 30700.027786  # mc_3 + mf_2 + mp
+Isp_1 = 280  # 250.24
+Isp_2 = 280  # 306.02
+Isp_3 = 280  # 305
+Cd = 0.5
+rho_0 = 1.225
+scale_altitude = 7.5e3
+d = 2.2
+Re = 6378135
+g_0 = 9.81
+m_dot_first_stage = 592.64056  # T1 / (Isp_1 * g_0)
+m_dot_second_stage = 592.64056  # T2 / (Isp_2 * g_0)
+m_dot_third_stage = 592.64056  # T3 / (Isp_3 * g_0)
+burnout_time_first_stage = 82  # mf_1 / m_dot_first_stage
+burnout_time_second_stage = 82  # mf_2 / m_dot_second_stage
+burnout_time_third_stage = 50  # mf_3 / m_dot_third_stage
+A = math.pi * (d ** 2) * 0.25
+coast_time_1 = 50
+coast_time_2 = 176
+
+"Write the RHS of ODEs. The EOM differ slightly and produce slightly different results." \
+"For now I'm keeping both versions of the equations, one from a book by Curtis and the other by Wiesel." \
+" The functions are designed to be inputed into odeint later "
+
+
+def du_dx_curtis(u, t, m_dot, T):
+    density = rho_0 * math.exp(-u[2] / scale_altitude)
+    drag = 0.5 * A * Cd * (u[0] ** 2) * density
+    g = g_0 / ((1 + (u[2] / Re)) ** 2)
+    dm_dt = -m_dot
+    dv_dt = T / u[4] - drag / u[4] - g * np.sin(u[1])
+    dy_dt = (-1 / u[0]) * (g - (u[0] ** 2) / (Re + u[2])) * np.cos(u[1])
+    dh_dt = u[0] * np.sin(u[1])
+    dx_dt = (Re / (Re + u[2])) * u[0] * np.cos(u[1])
+    return [dv_dt, dy_dt, dh_dt, dx_dt, dm_dt]
+
+
+def du_dx_wiesel(u, t, m_dot, T):
+    density = rho_0 * math.exp(-u[2] / scale_altitude)
+    drag = 0.5 * A * Cd * (u[0] ** 2) * density
+    g = g_0 / ((1 + (u[2] / Re)) ** 2)
+    dm_dt = -m_dot
+    dv_dt = T / u[4] - drag / u[4] - (g - ((u[0] * np.cos(u[1])) ** 2) / (Re + u[2])) * np.sin(u[1])
+    dy_dt = (-1 / u[0]) * (g - ((u[0] * np.cos(u[1])) ** 2) / (Re + u[2])) * np.cos(u[1])
+    dh_dt = u[0] * np.sin(u[1])
+    dx_dt = u[0] * np.cos(u[1])
+    return [dv_dt, dy_dt, dh_dt, dx_dt, dm_dt]
+
+
+""" This function is designed to return the post-pitchover initial conditions if the rocket starts from the ground. """
+
+
+def pitchover(pitchover_altitude, pitchover_angle):
+    p = (m_dot_first_stage, T1)
+    u0 = [0.01, math.pi / 2, 0, 0, m_0_first_stage]
+    time = np.linspace(0, 10, 1000)
+    sol = odeint(du_dx_curtis, u0, time, p)
+    h = sol[:, 2]
+    heights = h.tolist()
+    times = time.tolist()
+    for value in heights:
+        if value - pitchover_altitude < 1:
+            h_0 = value
+            pos = heights.index(h_0)
+    vel = sol[:, 0]
+    w = [vel[pos], np.deg2rad(pitchover_angle), h_0, 0]
+    t = times[pos]
+    return w, t
+
+
+"""Solved the ODEs for each stage"""
+
+
+def stage_motion_burn(option, w, init_t, book):
+    if option == 1:
+        p = (m_dot_first_stage, T1)
+        time = np.linspace(init_t, burnout_time_first_stage, 10000)
+    if option == 2:
+        p = (m_dot_second_stage, T2)
+        time = np.linspace(0, burnout_time_second_stage, 10000)
+    elif option == 3:
+        p = (m_dot_third_stage, T3)
+        time = np.linspace(0, burnout_time_third_stage, 10000)
+    if book == "curtis":
+        us = odeint(du_dx_curtis, w, time, p)
+    elif book == "wiesel":
+        us = odeint(du_dx_wiesel, w, time, p)
+    altitudes = us[:, 2]
+    distances = us[:, 3]
+    velocities = us[:, 0]
+    angles = us[:, 1]
+    mass = us[:, 4]
+    return velocities, angles, altitudes, distances, mass
+
+
+def stage_motion_coasting(option, w, book):
+    p = (0, 0)
+    if option == 1:
+        time = np.linspace(0, coast_time_1, 10000)
+    if option == 2:
+        time = np.linspace(0, coast_time_2, 10000)
+    if book == "curtis":
+        us = odeint(du_dx_curtis, w, time, p)
+    elif book == "wiesel":
+        us = odeint(du_dx_wiesel, w, time, p)
+    altitudes = us[:, 2]
+    distances = us[:, 3]
+    velocities = us[:, 0]
+    angles = us[:, 1]
+    mass = us[:, 4]
+    return velocities, angles, altitudes, distances, mass
+
+
+"""Brings the stages together"""
+
+
+def combining_stages_no_coasting(w, init_t, number_of_stages):
+    u0 = w
+    velocity_1, angle_1, altitude_1, distance_1, mass_1 = stage_motion_burn(1, u0, init_t, "wiesel")
+    u1 = [velocity_1[-1], angle_1[-1], altitude_1[-1], distance_1[-1], m_0_second_stage]
+    velocity_2, angle_2, altitude_2, distance_2, mass_2 = stage_motion_burn(2, u1, 0, "wiesel")
+    u2 = [velocity_2[-1], angle_2[-1], altitude_2[-1], distance_2[-1], m_0_third_stage]
+    v = velocity_1.tolist() + velocity_2.tolist()
+    angl = angle_1.tolist() + angle_2.tolist()
+    alt = altitude_1.tolist() + altitude_2.tolist()
+    dis = distance_1.tolist() + distance_2.tolist()
+    ms = mass_1.tolist() + mass_2.tolist()
+    if number_of_stages == 3:
+        velocity_3, angle_3, altitude_3, distance_3, mass_3 = stage_motion_burn(3, u2, 0, "wiesel")
+        v = v + velocity_3.tolist()
+        angl = angl + angle_3.tolist()
+        alt = alt + altitude_3.tolist()
+        dis = dis + distance_3.tolist()
+        ms = ms + mass_3.tolist()
+    return v, angl, alt, dis, ms
+
+
+def combining_stages_coasting(w, init_t, number_of_stages):
+    u0 = w
+    velocity_1, angle_1, altitude_1, distance_1, mass_1 = stage_motion_burn(1, u0, init_t, "wiesel")
+    u1 = [velocity_1[-1], angle_1[-1], altitude_1[-1], distance_1[-1], m_0_second_stage]
+    velocity_2, angle_2, altitude_2, distance_2, mass_2 = stage_motion_coasting(1, u1, "wiesel")
+    u2 = [velocity_2[-1], angle_2[-1], altitude_2[-1], distance_2[-1], m_0_second_stage]
+    velocity_3, angle_3, altitude_3, distance_3, mass_3 = stage_motion_burn(2, u2, 0, "wiesel")
+    u3 = [velocity_3[-1], angle_3[-1], altitude_3[-1], distance_3[-1], m_0_third_stage]
+    velocity_4, angle_4, altitude_4, distance_4, mass_4 = stage_motion_coasting(2, u3, "wiesel")
+    v = velocity_1.tolist() + velocity_2.tolist() + velocity_3.tolist() + velocity_4.tolist()
+    angl = angle_1.tolist() + angle_2.tolist() + angle_3.tolist() + angle_4.tolist()
+    alt = altitude_1.tolist() + altitude_2.tolist() + altitude_3.tolist() + altitude_4.tolist()
+    dis = distance_1.tolist() + distance_2.tolist() + distance_3.tolist() + distance_4.tolist()
+    ms = mass_1.tolist() + mass_2.tolist() + mass_3.tolist() + mass_4.tolist()
+    if number_of_stages == 3:
+        u4 = [velocity_4[-1], angle_4[-1], altitude_4[-1], distance_4[-1], m_0_third_stage]
+        velocity_5, angle_5, altitude_5, distance_5, mass_5 = stage_motion_burn(3, u4, 0, "wiesel")
+        v = v + velocity_5.tolist()
+        angl = angl + angle_5.tolist()
+        alt = alt + altitude_5.tolist()
+        dis = dis + distance_5.tolist()
+        ms = ms + mass_5.tolist()
+    return v, angl, alt, dis, ms
+
+
+"""Iterative function designed to determnine the intitial launch angle
+ for which the rocket ends up ina horizontal poistion and engine burnout"""
+
+
+def angle_iteration(option, w, type):
+    y0 = np.deg2rad(89.9)
+    y1 = y0
+    y2 = y1 - np.deg2rad(0.05)
+    yf = np.pi / 2
+    while abs(yf) > np.deg2rad(2):
+        if option and w is None:
+            u1, init_t_1 = pitchover(130, y1)
+            u2, init_t_2 = pitchover(130, y2)
+        else:
+            u1 = [w[0], y1, w[2], w[3], w[4]]
+            u2 = [w[0], y2, w[2], w[3], w[4]]
+            init_t_1 = 0
+            init_t_2 = 0
+        if type == "burn":
+            vel_1, ang_1, alt_1, dis_1, ms_1 = combining_stages_no_coasting(u1, init_t_1, 3)
+            vel_2, ang_2, alt_2, dis_2, ms_2 = combining_stages_no_coasting(u2, init_t_2, 3)
+        elif type == "coasting":
+            vel_1, ang_1, alt_1, dis_1, ms_1 = combining_stages_coasting(u1, init_t_1, 3)
+            vel_2, ang_2, alt_2, dis_2, ms_2 = combining_stages_coasting(u2, init_t_2, 3)
+        yf_1 = ang_1[-1]
+        yf_2 = ang_2[-1]
+        y_n_plus_one = y2 - (abs(y2 - y1) / abs(yf_2 - yf_1)) * yf_2
+        y1 = y2
+        y2 = y_n_plus_one
+        yf = yf_2
+    return y2
+
+
+def RK4(init_t, w, final_time, n, p):
+    h = (final_time - init_t) / n
+    u = w
+    t0 = init_t
+    vels = []
+    angs = []
+    alts = []
+    diss = []
+    mss = []
+    for i in range(n):
+        k1 = h * np.array(du_dx_wiesel(u, t0, p[0], p[1]))
+        k2 = h * np.array(du_dx_wiesel(u + k1 / 2, t0 + h / 2, p[0], p[1]))
+        k3 = h * np.array(du_dx_wiesel(u + k2 / 2, t0 + h / 2, p[0], p[1]))
+        k4 = h * np.array(du_dx_wiesel(u + k3, t0 + h, p[0], p[1]))
+        k = (k1 + 2 * k2 + 2 * k3 + k4) / 6
+        sol = u + k
+        vel = sol[0]
+        ang = sol[1]
+        alt = sol[2]
+        dis = sol[3]
+        ms = sol[4]
+        vels.append(vel)
+        angs.append(ang)
+        alts.append(alt)
+        diss.append(dis)
+        mss.append(ms)
+        u += k
+        t0 += h
+    return vels, angs, alts, diss, mss
+
+
+q = [134.112, np.deg2rad(89.9975), 6096, 0, m_0_first_stage]
+#q = [134.112, np.deg2rad(0), 6096, 0, m_0_first_stage]
+vel, ang, alt, dis, ms = combining_stages_coasting(q, 0, 3)
+"""vel, ang, alt, dis, ms = stage_motion_burn(1, q, 0, "wiesel")
+z = [vel[-1], ang[-1], alt[-1], dis[-1], m_0_second_stage]
+vel_1, ang_1, alt_1, dis_1, ms_1 = stage_motion_coasting(1, z, "wiesel")
+m = [vel_1[-1], ang_1[-1], alt_1[-1], dis_1[-1], m_0_second_stage]
+vel_2, ang_2, alt_2, dis_2, ms_2 = stage_motion_burn(2, m, 0, "wiesel")
+n = [vel_2[-1], ang_2[-1], alt_2[-1], dis_2[-1], m_0_third_stage]
+vel_3, ang_3, alt_3, dis_3, ms_3 = stage_motion_coasting(2, n, "wiesel")
+c = [vel_3[-1], ang_3[-1], alt_3[-1], dis_3[-1], m_0_third_stage]
+vel_4, ang_4, alt_4, dis_4, ms_4 = stage_motion_burn(3, c, 0, "wiesel")
+vel_5, ang_5, alt_5, dis_5, ms_5 = combining_stages_coasting(q, 0, 3)
+
+vel_t_1, ang_t_1, alt_t_1, dis_t_1, ms_t_1 = RK4(0, q, burnout_time_first_stage, 10000, [m_dot_first_stage, T1])
+z_dash = [vel_t_1[-1], ang_t_1[-1], alt_t_1[-1], dis_t_1[-1], m_0_second_stage]
+vel_t_2, ang_t_2, alt_t_2, dis_t_2, ms_t_2 = RK4(0, z_dash, coast_time_1, 10000, [0, 0])
+m_dash = [vel_t_2[-1], ang_t_2[-1], alt_t_2[-1], dis_t_2[-1], m_0_second_stage]
+vel_t_3, ang_t_3, alt_t_3, dis_t_3, ms_t_3 = RK4(0, m_dash, burnout_time_first_stage, 10000, [m_dot_second_stage, T2])
+n_dash = [vel_t_3[-1], ang_t_3[-1], alt_t_3[-1], dis_t_3[-1], m_0_third_stage]
+vel_t_4, ang_t_4, alt_t_4, dis_t_4, ms_t_4 = RK4(0, n_dash, coast_time_2, 10000, [0, 0])
+c_dash = [vel_t_4[-1], ang_t_4[-1], alt_t_4[-1], dis_t_4[-1], m_0_third_stage]
+vel_t_5, ang_t_5, alt_t_5, dis_t_5, ms_t_5 = RK4(0, c_dash, burnout_time_third_stage, 10000, [m_dot_third_stage, T3])
+
+plt.xlabel('distance,m')
+plt.ylabel('altitudes,m')
+plt.plot(dis_t_1, alt_t_1)
+plt.plot(dis_t_2, alt_t_2)
+plt.plot(dis_t_3, alt_t_3)
+plt.plot(dis_t_4, alt_t_4)
+plt.plot(dis_t_5, alt_t_5)
+plt.plot(dis, alt)
+plt.plot(dis_1, alt_1)
+plt.plot(dis_2, alt_2)
+plt.plot(dis_3, alt_3)
+plt.plot(dis_4, alt_4)
+#plt.plot(dis_5, alt_5)
+plt.grid(True, "both")
+plt.show()"""
+
+"""diff = []
+zip_obj = zip(dis_t_4, dis_3)
+for dis_i, dis_ti in zip_obj:
+    diff.append(dis_i - dis_ti)
+print(diff)"""
+
+"""def sphere(x, y, r, sign):
+    if sign == "plus":
+        return np.sqrt(r ** 2 - x ** 2 - y ** 2)
+    if sign == "minus":
+        return -np.sqrt(r ** 2 - x ** 2 - y ** 2)"""
+
+"""x = np.linspace(-10, 10, 500)
+y = np.linspace(-10, 10, 500)
+
+X, Y = np.meshgrid(x, y)
+Z_1 = sphere(X, Y, 6, "plus")
+Z_2 = sphere(X, Y, 6, "minus")
+fig = plt.figure()
+ax = plt.axes(projection='3d')
+ax.contour3D(X, Y, Z_1, 50, cmap='binary')
+ax.contour3D(X, Y, Z_2, 50, cmap='binary')
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_zlabel('z')
+plt.show()"""
+
+"""def draw_earth():
+    x = np.linspace(-10, 10, 500)
+    y = np.linspace(-10, 10, 500)
+    X, Y = np.meshgrid(x, y)
+    Z_1 = sphere(X, Y, 6, "plus")
+    Z_2 = sphere(X, Y, 6, "minus")
+    fig = plt.figure()
+    ax = plt.axes(projection='3d')
+    ax.contour3D(X, Y, Z_1, 50, cmap='binary')
+    ax.contour3D(X, Y, Z_2, 50, cmap='binary')
+    ax.set_xlabel('x')
+    ax.set_ylabel('y')
+    ax.set_zlabel('z')
+    plt.show()
+
+
+def visualise_trajectory(range, height, bearing):
+
+
+def visualsing_trajectory():"""
+
+
+def converting_to_3d(x_triple_dash, y_triple_dash, latitude, longitude, bearing, direction, angles, number_of_stages):
+    latitude = np.deg2rad(latitude)
+    longitude = np.deg2rad(longitude)
+    bearing = np.deg2rad(bearing)
+    if number_of_stages == 3:
+        time = np.linspace(0,
+                           burnout_time_first_stage + coast_time_1 + burnout_time_second_stage + coast_time_2 + burnout_time_third_stage,
+                           50000)
+    elif number_of_stages == 2:
+        time = np.linspace(0,
+                           burnout_time_first_stage + coast_time_1 + burnout_time_second_stage + coast_time_2,
+                           40000)
+    omega = 1 / 7.2921159e5
+    x_triple_dash = np.array(x_triple_dash)
+    y_triple_dash = np.array(y_triple_dash)
+    rocket_omega = ((x_triple_dash * np.cos(angles)) ** 2) / (Re + y_triple_dash)
+    if direction == "North":
+        x_double_dash = y_triple_dash * math.cos(latitude) - x_triple_dash * math.sin(latitude) * math.cos(bearing)
+        y_double_dash = y_triple_dash * math.sin(latitude) - x_triple_dash * math.cos(latitude) * math.cos(bearing)
+    elif direction == "South":
+        x_double_dash = y_triple_dash * math.cos(latitude) + x_triple_dash * math.sin(latitude) * math.cos(bearing)
+        y_double_dash = y_triple_dash * math.sin(latitude) - x_triple_dash * math.cos(latitude) * math.cos(bearing)
+    x_dash = (Re * math.cos(latitude) + x_double_dash) * math.cos(longitude)
+    y_dash = (Re * math.cos(latitude) + x_double_dash) * math.sin(longitude)
+    z_dash = Re * math.sin(latitude) + y_double_dash
+    x = np.cos(omega * time - rocket_omega) * x_dash - np.sin(omega * time - rocket_omega) * y_dash
+    y = np.sin(omega * time - rocket_omega) * x_dash + np.cos(omega * time - rocket_omega) * y_dash
+    z = z_dash
+    return x_dash, y_dash, z_dash
+
+
+X, Y, Z = converting_to_3d(dis, alt, 60.8, 0.79, 0, "North", ang, 3)
+
+fig = plt.figure()
+ax = plt.axes(projection='3d')
+ax.scatter(X, Y, Z)
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_zlabel('z')
+# plt.plot(dis, alt)
+plt.show()
+# def converting_to_spherical(x,y,z):
+
+# p_3 = [0.001754512168930e5, 0.000008047378571e5, 2.504281851780255e5, 0.228015827901680e5, m_0_third_stage]
+# p_2 = [0.017000361109895e5, 0.000014991835027e5, 1.046586800525807e5, 0.033391256060775e5, m_0_second_stage]
+# p_1 = [0.006942133499956e4, 0.000156251826025e4, 4.658271325500419e4, 0.004220697677340e4, m_0_second_stage]
+# p_0 = [0.055991924874688e4, 0.000156976998600e4, 3.084926549845005e4, 0.001347358225826e4, m_0_second_stage]
