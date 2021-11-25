@@ -1,0 +1,70 @@
+from scipy.integrate import odeint
+from mpl_toolkits import mplot3d
+import numpy as np
+import math 
+
+#%matplotlib notebook
+%matplotlib inline 
+
+import matplotlib.pyplot as plt
+
+t = 0.005 # Rocket wall thickness 
+
+# Skyrora XL
+d1 = 2.2 # Rocket diameter 
+l1 = 22.7 # Rocket length 
+den1 = 2710 # Al density kgm^-3
+Bm1 = 1.1
+
+# Launcher One
+d2 = 1.8
+l2 = 21.3
+den2 = 2230
+Bm2 = 1.1
+
+
+# m = np.linspace(0.11,0.12,50)
+m = np.linspace(0.0,0.005,30)
+NumMass1 = np.zeros(30)
+NumMass2 = np.zeros(30)
+k = 0
+
+def motts(m,Bm,t,d,den,l):
+    sa = d*(np.pi)*(l + d/2)
+    shell_m = t*sa*den
+
+    Ma = Bm*(t**(5/6))*(d**(1/3))*(1+(t/d))
+    N0 = shell_m/(2*(Ma**2))
+    N = (N0)*np.exp(-(m**(1/2))/Ma)
+    return N0, Ma,N
+
+for i in m:
+    N0, Ma, S = motts(i,Bm1,t,d1,den1,l1)
+    NumMass1[k] = S
+    k = k + 1
+    # print(S)
+
+k = 0
+for i in m:
+    N0, Ma, S = motts(i,Bm2,t,d2,den2,l2)
+    NumMass2[k] = S
+    k = k + 1
+    # print(S)
+fig = plt.figure()
+
+plt.title('Mott Fragment Mass Distribution')
+plt.xlabel('Mass/kg')
+plt.ylabel('No. of fragments with mass greater than m')
+plt.plot(m, NumMass1)
+plt.plot(m, NumMass2)
+plt.legend(['Skyrora XL','Launcher One'])
+plt.axis('tight')
+plt.ticklabel_format(axis="x", style="sci", scilimits=(0,0))
+plt.autoscale(enable=True, axis='x', tight=True)
+plt.autoscale(enable=True, axis='y', tight=True)
+#plt.grid(True, "both")
+plt.show()
+
+print(NumMass)
+print(m)
+
