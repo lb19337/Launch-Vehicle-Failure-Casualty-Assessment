@@ -1,0 +1,188 @@
+import numpy as np
+from scipy.integrate import odeint
+import matplotlib.pyplot as plt
+import math
+import random
+
+m = 45359  # Mass of liquid propellant
+Y = 0.011  # TNT Coefficient
+d0 = 660  # Diameter of rocket
+delta0 = 0.0055  # Average thickness of rocket
+M = 6500  # Mass of rocket
+Qv_TNT = 4225  # kJ/kg
+# Basci Parameters
+g = 9.81
+rho_a = 1.225  # Air density
+C_d = 1.5  # Air up wind resistance coefficient
+pi = math.pi
+
+K = 0.145  # K: is a constant determined by the material properties
+miu = (K ** 2) * math.pow(delta0, 5 / 3) * math.pow(d0, 2 / 3) * math.pow(1 + delta0 / d0, 2)
+
+
+# Mott Parameter
+def compute_A_d(m_p):
+    return 3.4 * 0.001 * math.pow(m_p, 2 / 3)  # Windward area
+
+def compute_k(m_p):  # Drag coefficient
+    A_d = compute_A_d(m_p)
+
+    return 0.5 * rho_a * C_d * A_d / m_p
+
+
+def compute_N(m_p):  # Number of fragment
+    return (M / 2 * miu) * math.exp(-(m_p / miu) ** 0.5)
+
+
+def compute_a(k):
+    return math.pow(k / g, 1 / 2)
+h = 1000  # height
+
+
+Phi = 0.0035
+
+
+def compute_T(v_0, phi):  # Landing Time
+    return math.pow(2 * (v_0 * math.sin(phi) + h) / g, 1 / 2)  # fix: it seems better be a + h
+
+
+def compute_E(m_p, v_0, phi):  # Kinetic Energy of fragments’ Landing
+    v = v_0 * math.sin(phi) - g
+    return math.pow(m_p, 1 / 3) * math.pow(v_0, 2) / (2 * Phi)
+    # Flight trajectory equation of fragments
+
+
+def compute_xyz_t(m_p, v_0, phi, theta, t, k, a, b, c, israise):
+    x_t = math.cos(theta) * math.log((k * t * v_0 * math.cos(phi) + 1)) / k
+    y_t = math.sin(theta) * math.log((k * t * v_0 * math.cos(phi) + 1)) / k
+    if israise:
+        z_t_ = math.tan(b - a * g * t) / a
+        z_t = - (1 / (2 * k)) * math.log(((a ** 2) * (z_t_ ** 2) + 1) / ((a * v_0 * math.sin(phi)) ** 2 + 1))
+    else:
+        z_t_ = (1 - math.exp(c * t - 2 * b)) / (a * (1 + math.exp(c * t - 2 * b)))
+        z_t = (1 / (2 * k)) * (math.log((a * v_0 * math.sin(phi)) ** 2 + 1) + math.log(1 - (a ** 2) * (z_t_ ** 2)))
+    z_t += h
+    return x_t, y_t, z_t
+
+
+def compute_xyz(m_p, v_0, phi, theta, delta_t, T):
+    t = delta_t
+    x = [0]
+    y = [0]
+    z = [h]
+    k = compute_k(m_p)
+    a = math.sqrt(k / g)
+    b = math.atan(a * v_0 * math.sin(phi))
+    c = 2 * k / a
+    top_t = b / (a * g)
+    while (t < T):
+        x_t, y_t, z_t = compute_xyz_t(m_p, v_0, phi, theta, t, k, a, b, c, t < top_t)
+        if (z_t < 0):
+            break
+        x.append(x_t)
+        y.append(y_t)
+        z.append(z_t)
+        t += delta_t
+        print(x, y, z)
+    return x, y, z, k, a, b, c, top_t
+    # Mass of Fragment
+
+
+mu, sigma = 6.8, 5.8
+
+
+def compute_v0(m_p):  # Initial velocity
+    return np.sqrt(0.6 * m * Y * Qv_TNT / m_p)
+
+
+def compute_phi():
+    return random.uniform(0, 0.5 * pi)  # Angle of projection
+
+
+def compute_theta():
+    return random.uniform(0, 2 * pi)  # Angle of position
+    # Generate the specific parameter
+
+
+def generate():
+    m_p = max(1, np.random.normal(mu, sigma, 1)[0])
+    v_0 = compute_v0(m_p)
+    phi = compute_phi()
+    theta = compute_theta()
+    T = compute_T(v_0, phi)
+    E = compute_E(m_p, v_0, phi)
+
+    x, y, z, k, a, b, c, top_t = compute_xyz(m_p, v_0, phi, theta, delta_t, T)
+    ret = {
+        'm_p': m_p,
+        'v_0': v_0,
+        'phi': phi,
+        'theta': theta,
+        'T': T,
+        'E': E,
+        'a': a,
+        'b': b,
+        'c': c,
+        'k': k,
+        'top_t': top_t,
+        'XYZ': (x, y, z)
+    }
+
+    return ret
+delta_t = 0.5
+
+
+N = 100
+Results = []
+for _ in range(N):
+    Results.append(generate())
+#3D space diagram simulating the flying trajectory of fragments
+import matplotlib as mpl
+from mpl_toolkits.mplot3d import Axes3D
+
+mpl.rcParams['legend.fontsize'] = 10
+
+fig = plt.figure()
+ax = fig.gca(projection='3d')
+
+
+for tra in Results[:100]:
+    ax.plot(tra['XYZ'][0],tra['XYZ'][1], tra['XYZ'][2], c='b')
+
+plt.show()
+
+#The distribution of falling points of rocket fragments
+x_list = []
+y_list = []
+
+for tra in Results[:100]:
+    x_list.append(tra['XYZ'][0][-1])
+    y_list.append(tra['XYZ'][1][-1])
+plt.figure(figsize=(6, 6))
+plt.scatter(x_list, y_list)
+plt.show()
+
+#X is radius, Y is the probabilty landing on each radius
+cell = 10
+r_count = [0] * cell
+for tra in Results[:200]:
+    r = math.sqrt(tra['XYZ'][0][-1] ** 2 + tra['XYZ'][1][-1] ** 2)
+    r_count[int(r // 200)] += 1
+r_count = np.array(r_count)
+r_prob = r_count / sum(r_count)
+acc_r_prob = [r_prob[0]] * cell
+for i in range(1,cell):
+    acc_r_prob[i] = acc_r_prob[i-1] + r_prob[i]
+plt.plot(list(range(200, cell * 200+ 1, 200)), acc_r_prob)
+plt.show()
+
+#Heat Map: The enery distribution when fragments' landing
+cell = 10
+heat_map = [(float('inf'),float('-inf')) for _ in range(cell)]
+for tra in Results[:200]:
+    r = math.sqrt(tra['XYZ'][0][-1] ** 2 + tra['XYZ'][1][-1] ** 2)
+    ind = int(r // 200)
+    E = tra['E']
+    heat_map[ind] = (min(heat_map[ind][0], E), max(heat_map[ind][1], E))
+for ind, hm in enumerate(heat_map):
+    print("{}-{} : count {}, E from {} to {}".format(ind * 200, ind * 200 + 200, r_count[ind], hm[0], hm[1]))
